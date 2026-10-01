@@ -51,44 +51,42 @@ interface FoodAnalysisResponse {
 }
 
 const NUTRITION_SYSTEM_PROMPT = `You are NutriSnap's expert clinical dietitian and food vision recognition engine.
-Analyze the user's food photo and estimate the nutritional breakdown per 100 grams for each distinct food item on the plate.
+The user is photographing their meal, dish, snack, beverage, or groceries to track calories and macros.
 
-CRITICAL INSTRUCTIONS:
-1. FIRST check if the image depicts edible food, beverages, or meals. If it is NOT food (e.g. shoes, furniture, electronics, documents, random object, empty table, human faces with no food, pet), set "is_food": false with an explanatory "reason" politely asking the user to upload a clear photo of their meal.
-2. If food IS present, set "is_food": true.
-3. Identify every distinct food or beverage component on the plate/container.
-   - You MUST recognize South Asian, Nepali, Indian, and Global cuisines accurately:
-     * Dal Bhat Tarkari (steamed rice, yellow lentil soup, spiced vegetable curry)
-     * Momo (steamed, fried, or kothey dumplings - vegetable, chicken, buff)
-     * Thukpa (Tibetan/Nepali noodle soup)
-     * Chowmein / Fried Noodles
-     * Sel Roti (traditional ring-shaped crispy fried rice donut)
-     * Roti / Chapati / Naan / Paratha
-     * Aalu Tama, Gundruk Bhatmas, Aalu Dum
-     * Sukuti, Choila, Sekuwa, Bara
-     * Biryani, Pulao, Khichdi
-     * Paneer butter masala, Chicken tikka masala, Palak paneer
-     * Samosa, Pakora, Chaat
-     * Western/Global foods: Oatmeal, Eggs, Avocado toast, Grilled chicken breast, Steamed broccoli, Salmon, Rice bowls, Pasta, Pizza, Burgers, Salads, Protein shakes, Fruits, etc.
-4. For each item provide realistic macronutrient data PER 100 GRAMS based on standard nutritional composition databases (USDA / ICMR):
-   - name: clear, appetizing name (e.g. "Steamed Chicken Momo", "Yellow Lentil Dal", "Steamed Basmati Rice")
-   - calories_per_100g: integer or 1 decimal place (kcal per 100g)
+GUIDELINES:
+1. Always assume good faith that the user is submitting food or a beverage. Even if the dish is home-cooked, in a container, wrapped, liquid, partially eaten, or dimly lit, identify the components and estimate nutrition.
+2. Only set "is_food": false if the image is 100% definitively NOT food (e.g. a car, a laptop, shoes, pet, or plain document).
+3. If food IS present, set "is_food": true.
+4. Accurately recognize both Global and South Asian / Nepali / Indian cuisines:
+   * Dal Bhat Tarkari (steamed rice, yellow lentil soup, mixed vegetable curry, greens)
+   * Momo (steamed, fried, or kothey dumplings - chicken, buff, veg, paneer)
+   * Thukpa (Himalayan noodle soup)
+   * Chowmein / Stir-fried noodles
+   * Sel Roti (traditional crispy rice donut)
+   * Roti / Chapati / Paratha / Naan
+   * Aalu Tama, Gundruk Bhatmas, Aalu Dum, Saag
+   * Sukuti, Choila, Sekuwa, Bara
+   * Biryani, Pulao, Khichdi
+   * Paneer butter masala, Chicken curry, Lentil soups
+   * Samosa, Pakora, Chaat
+   * Western/Global foods: Oatmeal, Eggs, Avocado toast, Grilled chicken, Rice bowls, Pasta, Pizza, Burgers, Salads, Sandwiches, Protein shakes, Fruits, etc.
+5. Provide realistic macronutrient estimates PER 100 GRAMS (USDA / ICMR nutritional benchmarks):
+   - name: clear, appetizing name
+   - calories_per_100g: integer (kcal per 100g)
    - protein_g_per_100g: float (g per 100g)
    - carbs_g_per_100g: float (g per 100g)
    - fat_g_per_100g: float (g per 100g)
    - confidence: "high", "medium", or "low"
-   - suggested_weight_g: estimated visual portion size in grams (e.g. 150 for rice portion, 80 for dal bowl, 180 for 6 momos)
-5. Return ONLY a single valid JSON object. Do not include markdown code fences, backticks, or conversational preamble.
-
-Required JSON format:
+   - suggested_weight_g: typical visual portion in grams (e.g. 180 for rice, 120 for curry)
+6. Output MUST be ONLY valid JSON matching this schema:
 {
   "is_food": true,
-  "summary": "Brief 1-sentence description of the meal",
+  "summary": "1-sentence description of the meal",
   "meal_category": "Breakfast" | "Lunch" | "Dinner" | "Snack",
   "items": [
     {
       "name": "Steamed Chicken Momo",
-      "calories_per_100g": 180,
+      "calories_per_100g": 185,
       "protein_g_per_100g": 9.5,
       "carbs_g_per_100g": 22.0,
       "fat_g_per_100g": 6.0,
@@ -98,10 +96,10 @@ Required JSON format:
   ]
 }
 
-If not food:
+If entirely non-food:
 {
   "is_food": false,
-  "reason": "We couldn't detect food or beverage in this image. Please take a clear photo of your meal and try again.",
+  "reason": "This image does not appear to contain edible food or drink. Please snap a clear photo of your meal.",
   "items": []
 }`;
 
@@ -116,17 +114,26 @@ function parseImageData(dataUrlOrBase64: string): { mimeType: string; base64Data
   return { mimeType: 'image/jpeg', base64Data: dataUrlOrBase64 };
 }
 
-// Clean JSON response string from models
+// Clean JSON response string from models with regex extraction fallback
 function cleanJsonResponse(raw: string): any {
   let cleaned = raw.trim();
   // Strip Markdown code block if present
   if (cleaned.startsWith('```')) {
     cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '');
   }
-  return JSON.parse(cleaned);
+  try {
+    return JSON.parse(cleaned);
+  } catch (err) {
+    // Attempt extracting the outer JSON object
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match) {
+      return JSON.parse(match[0]);
+    }
+    throw err;
+  }
 }
 
-// Fallback nutritional estimator if both APIs are temporarily unavailable
+// Fallback nutritional estimator if models encounter transient network/quota limits
 function generateSmartFallback(hint?: string): FoodAnalysisResponse {
   const normalized = (hint || '').toLowerCase();
   if (normalized.includes('momo')) {
@@ -157,13 +164,50 @@ function generateSmartFallback(hint?: string): FoodAnalysisResponse {
     };
   }
 
+  if (normalized.includes('dal') || normalized.includes('bhat') || normalized.includes('rice')) {
+    return {
+      is_food: true,
+      summary: 'Traditional Dal Bhat Tarkari',
+      meal_category: 'Lunch',
+      items: [
+        {
+          name: 'Steamed Rice (Bhat)',
+          calories_per_100g: 130,
+          protein_g_per_100g: 2.7,
+          carbs_g_per_100g: 28.0,
+          fat_g_per_100g: 0.3,
+          confidence: 'high',
+          suggested_weight_g: 180,
+        },
+        {
+          name: 'Yellow Lentil Dal',
+          calories_per_100g: 95,
+          protein_g_per_100g: 6.8,
+          carbs_g_per_100g: 14.2,
+          fat_g_per_100g: 1.5,
+          confidence: 'high',
+          suggested_weight_g: 120,
+        },
+        {
+          name: 'Mixed Veg Curry',
+          calories_per_100g: 110,
+          protein_g_per_100g: 3.5,
+          carbs_g_per_100g: 12.0,
+          fat_g_per_100g: 5.0,
+          confidence: 'medium',
+          suggested_weight_g: 120,
+        },
+      ],
+    };
+  }
+
   return {
     is_food: true,
-    summary: 'Analyzed balanced plate',
+    summary: 'Detected Balanced Meal Plate',
     meal_category: 'Lunch',
     items: [
       {
-        name: 'Mixed Meal Dish',
+        name: 'Meal Plate Item',
         calories_per_100g: 165,
         protein_g_per_100g: 8.5,
         carbs_g_per_100g: 21.0,
@@ -192,7 +236,7 @@ app.post('/api/analyze-food', async (req: Request, res: Response) => {
     let parsedResult: FoodAnalysisResponse | null = null;
     let providerUsed = '';
 
-    // If Anthropic Claude API key is configured, attempt Claude first if available
+    // If Anthropic Claude API key is configured, attempt Claude first if requested
     if (anthropicApiKey) {
       try {
         const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
@@ -243,28 +287,27 @@ app.post('/api/analyze-food', async (req: Request, res: Response) => {
       }
     }
 
-    // Use Gemini (@google/genai) as primary or reliable fallback
+    // Use Gemini (@google/genai) with reliable multi-model fallback:
+    // 1. 'gemini-3.1-flash-lite' (fastest, highly available)
+    // 2. 'gemini-flash-latest'
+    // 3. 'gemini-3.8-flash'
     if (!parsedResult && ai) {
-      try {
-        const imagePart = {
-          inlineData: {
-            mimeType: mimeType || 'image/jpeg',
-            data: base64Data,
-          },
-        };
+      const candidateModels = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash'];
+      const imagePart = {
+        inlineData: {
+          mimeType: mimeType || 'image/jpeg',
+          data: base64Data,
+        },
+      };
 
-        const textPart = {
-          text: `You are NutriSnap's food vision recognition engine. Analyze this image.
-${mealHint ? `Contextual note from user: "${mealHint}".` : ''}
-
-Estimate the nutritional breakdown per 100 grams for each distinct food item on the plate.
-Include South Asian / Nepali recognition (e.g., Dal Bhat, Momo, Thukpa, Chowmein, Sel Roti, Samosa, Curry, etc.) as well as Global foods.
-
-Return ONLY raw JSON with structure:
+      const textPart = {
+        text: `Analyze this food photo. ${mealHint ? `User context: "${mealHint}".` : ''}
+Identify each distinct food item on the plate/container.
+Provide nutritional breakdown per 100 grams (calories, protein, carbs, fat).
+Return ONLY raw JSON with:
 {
-  "is_food": true | false,
-  "reason": "If not food, friendly explanation",
-  "summary": "Short 1-sentence meal description",
+  "is_food": true,
+  "summary": "1-sentence summary",
   "meal_category": "Breakfast" | "Lunch" | "Dinner" | "Snack",
   "items": [
     {
@@ -273,46 +316,60 @@ Return ONLY raw JSON with structure:
       "protein_g_per_100g": 9.5,
       "carbs_g_per_100g": 22.0,
       "fat_g_per_100g": 6.0,
-      "confidence": "high" | "medium" | "low",
+      "confidence": "high",
       "suggested_weight_g": 180
     }
   ]
 }`,
-        };
+      };
 
-        const geminiResponse = await ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: { parts: [imagePart, textPart] },
-          config: {
-            systemInstruction: NUTRITION_SYSTEM_PROMPT,
-            responseMimeType: 'application/json',
-          },
-        });
+      for (const modelName of candidateModels) {
+        try {
+          const geminiResponse = await ai.models.generateContent({
+            model: modelName,
+            contents: { parts: [imagePart, textPart] },
+            config: {
+              systemInstruction: NUTRITION_SYSTEM_PROMPT,
+              responseMimeType: 'application/json',
+            },
+          });
 
-        const rawText = geminiResponse.text;
-        if (rawText) {
-          parsedResult = cleanJsonResponse(rawText);
-          providerUsed = 'Gemini 3.8 Flash';
+          const rawText = geminiResponse.text;
+          if (rawText) {
+            parsedResult = cleanJsonResponse(rawText);
+            providerUsed = `Gemini (${modelName})`;
+            break; // Succeeded!
+          }
+        } catch (modelErr: any) {
+          console.warn(`Model ${modelName} failed, trying next candidate:`, modelErr?.message || modelErr);
         }
-      } catch (geminiErr: any) {
-        console.error('Gemini vision API error:', geminiErr?.message || geminiErr);
       }
     }
 
     // If both failed or no keys present, provide structured realistic fallback response
     if (!parsedResult) {
       parsedResult = generateSmartFallback(mealHint);
-      providerUsed = 'NutriSnap Offline Knowledge Engine';
+      providerUsed = 'NutriSnap Smart Fallback Engine';
     }
 
-    // Safety checks on parsed result
+    // Safety checks on parsed result:
+    // If the model reported is_food: false, but the user supplied a hint or we can still provide a starter item,
+    // let's return is_food: false with clear friendly reason, but ALSO supply a fallback starter item so the frontend can offer 1-click override!
     if (parsedResult.is_food === false) {
       return res.json({
         success: true,
         is_food: false,
         reason:
           parsedResult.reason ||
-          'No food or beverage could be detected in this photo. Please make sure the food is well-lit and clearly visible in frame.',
+          'The AI could not confidently identify food in this photo. Lighting or angle may be unclear.',
+        suggestedFallback: {
+          name: mealHint || 'Custom Food Item',
+          calories_per_100g: 150,
+          protein_g_per_100g: 7,
+          carbs_g_per_100g: 20,
+          fat_g_per_100g: 5,
+          weight_g: defaultWeightG || 200,
+        },
         items: [],
         provider: providerUsed,
       });
@@ -321,7 +378,7 @@ Return ONLY raw JSON with structure:
     // Ensure items array is valid and calculate defaults
     const items = (parsedResult.items || []).map((item, idx) => {
       const weight = defaultWeightG || item.suggested_weight_g || 150;
-      const calPer100 = Number(item.calories_per_100g) || 100;
+      const calPer100 = Number(item.calories_per_100g) || 120;
       const proteinPer100 = Number(item.protein_g_per_100g) || 5;
       const carbsPer100 = Number(item.carbs_g_per_100g) || 15;
       const fatPer100 = Number(item.fat_g_per_100g) || 3;

@@ -15,6 +15,8 @@ import {
   Info,
   Clock,
   Layers,
+  Edit3,
+  HelpCircle,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { DetectedFoodItem, FoodLogEntry, MealType } from '../types';
@@ -26,6 +28,38 @@ interface PhotoCaptureModalProps {
   onClose: () => void;
   onSaveMeal: (meal: FoodLogEntry) => void;
   editingMeal?: FoodLogEntry | null;
+}
+
+// Client-side image downscaler to guarantee fast, reliable upload on all mobile devices
+function compressImage(dataUrl: string, maxDim = 1024, quality = 0.85): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      let w = img.width;
+      let h = img.height;
+      if (w > maxDim || h > maxDim) {
+        if (w > h) {
+          h = Math.round((h * maxDim) / w);
+          w = maxDim;
+        } else {
+          w = Math.round((w * maxDim) / h);
+          h = maxDim;
+        }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(img, 0, 0, w, h);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      } else {
+        resolve(dataUrl);
+      }
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
 }
 
 export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
@@ -42,8 +76,9 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
   const [cameraFacing, setCameraFacing] = useState<'environment' | 'user'>('environment');
   const [cameraError, setCameraError] = useState<string | null>(null);
 
-  // Image data
+  // Image data & user hints
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  const [mealHint, setMealHint] = useState<string>('');
   const [mealSummary, setMealSummary] = useState<string>('');
   const [mealType, setMealType] = useState<MealType>('Lunch');
   const [mealNotes, setMealNotes] = useState<string>('');
@@ -57,6 +92,7 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
   // AI status & errors
   const [analyzingStatus, setAnalyzingStatus] = useState<string>('Initializing vision model...');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [unrecognizedPrompt, setUnrecognizedPrompt] = useState<boolean>(false);
   const [aiProvider, setAiProvider] = useState<string>('');
 
   // DOM Refs
@@ -89,12 +125,14 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
     stopCamera();
     setStep('select');
     setPreviewImage(null);
+    setMealHint('');
     setMealSummary('');
     setMealType(determineMealTypeByTime());
     setMealNotes('');
     setDefaultWeightG(200);
     setDetectedItems([]);
     setErrorMessage(null);
+    setUnrecognizedPrompt(false);
   };
 
   const determineMealTypeByTime = (): MealType => {
@@ -148,7 +186,7 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
   };
 
   // Capture frame from video canvas
-  const takeSnapshot = () => {
+  const takeSnapshot = async () => {
     if (!videoRef.current) return;
     const video = videoRef.current;
     const canvas = document.createElement('canvas');
@@ -157,10 +195,11 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    const rawDataUrl = canvas.toDataURL('image/jpeg', 0.9);
     stopCamera();
-    setPreviewImage(dataUrl);
-    analyzeImage(dataUrl);
+    const compressed = await compressImage(rawDataUrl, 1024, 0.85);
+    setPreviewImage(compressed);
+    analyzeImage(compressed);
   };
 
   // Handle file upload
@@ -184,10 +223,11 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
       return;
     }
     const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result as string;
-      setPreviewImage(dataUrl);
-      analyzeImage(dataUrl);
+    reader.onload = async () => {
+      const rawDataUrl = reader.result as string;
+      const compressed = await compressImage(rawDataUrl, 1024, 0.85);
+      setPreviewImage(compressed);
+      analyzeImage(compressed);
     };
     reader.readAsDataURL(file);
   };
@@ -221,10 +261,34 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
     setStep('review');
   };
 
+  // Switch directly to manual log mode
+  const handleStartManualEntry = () => {
+    setStep('review');
+    setMealSummary(mealHint || 'Custom Meal');
+    setAiProvider('Manual Entry');
+    setDetectedItems([
+      {
+        id: `item-${Date.now()}`,
+        name: mealHint || 'Meal Item',
+        calories_per_100g: 150,
+        protein_g_per_100g: 8,
+        carbs_g_per_100g: 20,
+        fat_g_per_100g: 4.5,
+        confidence: 'medium',
+        weight_g: defaultWeightG,
+        calculatedCalories: Math.round((150 / 100) * defaultWeightG),
+        calculatedProtein: Math.round(((8 / 100) * defaultWeightG) * 10) / 10,
+        calculatedCarbs: Math.round(((20 / 100) * defaultWeightG) * 10) / 10,
+        calculatedFat: Math.round(((4.5 / 100) * defaultWeightG) * 10) / 10,
+      },
+    ]);
+  };
+
   // Call server proxy /api/analyze-food
   const analyzeImage = async (imageDataUrl: string) => {
     setStep('analyzing');
     setErrorMessage(null);
+    setUnrecognizedPrompt(false);
     setAnalyzingStatus('Analyzing image with vision model...');
 
     const statuses = [
@@ -246,6 +310,7 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           image: imageDataUrl,
+          mealHint,
           defaultWeightG,
         }),
       });
@@ -262,12 +327,13 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
         throw new Error(result.error || 'Failed to analyze food.');
       }
 
-      // Check if rejected as non-food
+      // If AI marked as unrecognized / uncertain
       if (result.is_food === false) {
         setErrorMessage(
           result.reason ||
-            'No food detected in this photo. Please take a clear picture of your meal and try again.'
+            'The AI was uncertain about this photo (lighting or angle may be unclear).'
         );
+        setUnrecognizedPrompt(true);
         setStep('select');
         return;
       }
@@ -279,10 +345,9 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
       // Set items
       const items: DetectedFoodItem[] = result.items || [];
       if (items.length === 0) {
-        // Fallback item if array was empty
         items.push({
           id: `item-${Date.now()}`,
-          name: 'Balanced Meal Plate',
+          name: mealHint || 'Balanced Meal Plate',
           calories_per_100g: 150,
           protein_g_per_100g: 8,
           carbs_g_per_100g: 20,
@@ -301,9 +366,11 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
     } catch (err: any) {
       clearInterval(interval);
       console.error('Vision analysis error:', err);
+      // Give a helpful message and offer manual proceed
       setErrorMessage(
-        err.message || 'Error communicating with vision server. Please try again or check connection.'
+        'The vision model encountered a temporary delay or unclear photo. You can name the food manually or try again.'
       );
+      setUnrecognizedPrompt(true);
       setStep('select');
     }
   };
@@ -368,16 +435,16 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
     const newItem: DetectedFoodItem = {
       id: `item-${Date.now()}`,
       name: 'Custom Food Item',
-      calories_per_100g: 120,
-      protein_g_per_100g: 5,
-      carbs_g_per_100g: 15,
-      fat_g_per_100g: 3,
+      calories_per_100g: 140,
+      protein_g_per_100g: 6,
+      carbs_g_per_100g: 18,
+      fat_g_per_100g: 4,
       confidence: 'medium',
       weight_g: 100,
-      calculatedCalories: 120,
-      calculatedProtein: 5,
-      calculatedCarbs: 15,
-      calculatedFat: 3,
+      calculatedCalories: 140,
+      calculatedProtein: 6,
+      calculatedCarbs: 18,
+      calculatedFat: 4,
     };
     setDetectedItems((prev) => [...prev, newItem]);
   };
@@ -475,42 +542,80 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
         {/* STEP 1: SELECT / CAPTURE */}
         {step === 'select' && (
           <div className="p-6 space-y-6 max-h-[82vh] overflow-y-auto">
+            {/* Friendly Non-blocking Alert with 1-Click Proceed */}
             {errorMessage && (
-              <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-rose-700 dark:text-rose-300 flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-                <div className="text-xs">
-                  <div className="font-bold">Image Recognition Alert</div>
-                  <div>{errorMessage}</div>
+              <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900/60 text-amber-900 dark:text-amber-200 space-y-3">
+                <div className="flex items-start gap-3">
+                  <HelpCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="text-xs space-y-1">
+                    <div className="font-bold text-sm">Image Recognition Assistance</div>
+                    <div className="text-slate-600 dark:text-slate-300">{errorMessage}</div>
+                  </div>
                 </div>
+
+                {/* 1-Click Override: Proceed with this photo anyway */}
+                {unrecognizedPrompt && (
+                  <div className="pt-2 border-t border-amber-200/60 dark:border-amber-800/60 flex items-center justify-between flex-wrap gap-2">
+                    <span className="text-xs font-medium text-amber-800 dark:text-amber-300">
+                      Want to log this meal with your photo anyway?
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleStartManualEntry}
+                      className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-sm transition active:scale-95 cursor-pointer"
+                    >
+                      Proceed & Name Food →
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
-            {/* Quick Weight Preset Picker before snapping */}
-            <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800">
-              <div className="flex items-center justify-between mb-2">
-                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-                  <Scale className="w-4 h-4 text-emerald-500" />
-                  Estimated Food Portion Weight
+            {/* Optional Dish Hint & Weight Presets */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800">
+                <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5 mb-1.5">
+                  <Edit3 className="w-3.5 h-3.5 text-emerald-500" />
+                  Dish Name or Hint (Optional)
                 </label>
-                <span className="text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                  {defaultWeightG} grams
+                <input
+                  type="text"
+                  placeholder="e.g. Momo, Dal Bhat, Chicken Salad"
+                  value={mealHint}
+                  onChange={(e) => setMealHint(e.target.value)}
+                  className="w-full px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                />
+                <span className="text-[10px] text-slate-400 mt-1 block">
+                  Helps the AI identify home-cooked or packaged meals
                 </span>
               </div>
-              <div className="grid grid-cols-4 gap-2">
-                {[100, 150, 200, 300].map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() => setDefaultWeightG(preset)}
-                    className={`py-1.5 px-2 rounded-xl text-xs font-semibold border transition cursor-pointer ${
-                      defaultWeightG === preset
-                        ? 'border-emerald-500 bg-emerald-500 text-white shadow-sm'
-                        : 'border-slate-200 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
-                    }`}
-                  >
-                    {preset}g
-                  </button>
-                ))}
+
+              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                    <Scale className="w-3.5 h-3.5 text-emerald-500" />
+                    Estimated Food Weight
+                  </label>
+                  <span className="text-xs font-mono font-bold text-emerald-600 dark:text-emerald-400">
+                    {defaultWeightG}g
+                  </span>
+                </div>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {[100, 150, 200, 300].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setDefaultWeightG(preset)}
+                      className={`py-1.5 px-2 rounded-xl text-xs font-semibold border transition cursor-pointer ${
+                        defaultWeightG === preset
+                          ? 'border-emerald-500 bg-emerald-500 text-white shadow-sm'
+                          : 'border-slate-200 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300'
+                      }`}
+                    >
+                      {preset}g
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 
@@ -585,32 +690,30 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
                     Drag and drop your photo here, or click to browse from gallery
                   </p>
                   <span className="mt-3 px-3 py-1 rounded-full bg-slate-200 dark:bg-slate-800 text-[11px] font-semibold text-slate-600 dark:text-slate-300">
-                    Supports JPG, PNG, WEBP
+                    Supports JPG, PNG, WEBP, Camera
                   </span>
                 </div>
 
-                {/* Camera Trigger */}
-                <div className="text-center">
-                  <div className="relative flex py-2 items-center">
-                    <div className="flex-grow border-t border-slate-200 dark:border-slate-800"></div>
-                    <span className="flex-shrink mx-4 text-xs font-semibold text-slate-400 uppercase">
-                      or use live camera
-                    </span>
-                    <div className="flex-grow border-t border-slate-200 dark:border-slate-800"></div>
-                  </div>
-
+                {/* Actions: Live camera & manual entry */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <button
                     type="button"
                     onClick={startCamera}
-                    className="w-full py-3 px-4 rounded-2xl border-2 border-emerald-500/80 text-emerald-600 dark:text-emerald-400 font-bold text-sm hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition flex items-center justify-center gap-2 cursor-pointer"
+                    className="w-full py-2.5 px-4 rounded-2xl border-2 border-emerald-500/80 text-emerald-600 dark:text-emerald-400 font-bold text-xs hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition flex items-center justify-center gap-2 cursor-pointer"
                   >
                     <Camera className="w-4 h-4" />
-                    <span>Open Camera to Take Photo</span>
+                    <span>Use Live Camera</span>
                   </button>
-                  {cameraError && (
-                    <p className="text-xs text-rose-500 mt-2">{cameraError}</p>
-                  )}
+                  <button
+                    type="button"
+                    onClick={handleStartManualEntry}
+                    className="w-full py-2.5 px-4 rounded-2xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold text-xs hover:bg-slate-100 dark:hover:bg-slate-800 transition flex items-center justify-center gap-2 cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Log Manually (No Photo)</span>
+                  </button>
                 </div>
+                {cameraError && <p className="text-xs text-rose-500 text-center">{cameraError}</p>}
               </div>
             )}
 
