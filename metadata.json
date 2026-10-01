@@ -1,0 +1,6 @@
+{
+  "name": "NutriSnap - AI Calorie & Deficit Tracker",
+  "description": "Smart AI calorie tracker that analyzes food photos, calculates BMR, TDEE, macros, and daily calorie deficit using evidence-based formulas.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
