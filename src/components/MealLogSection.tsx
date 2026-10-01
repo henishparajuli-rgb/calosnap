@@ -26,10 +26,19 @@ export const MealLogSection: React.FC<MealLogSectionProps> = ({
   onOpenPhotoCapture,
 }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string>('All');
 
   const toggleExpand = (id: string) => {
     setExpandedId(expandedId === id ? null : id);
   };
+
+  const categories = ['All', 'Breakfast', 'Lunch', 'Dinner', 'Snack'];
+
+  const filteredLogs = selectedCategory === 'All'
+    ? logs
+    : logs.filter((l) => l.mealType === selectedCategory);
+
+  const filteredCalories = filteredLogs.reduce((acc, curr) => acc + curr.totalCalories, 0);
 
   const getMealBadgeColor = (type: string) => {
     switch (type) {
@@ -46,7 +55,7 @@ export const MealLogSection: React.FC<MealLogSectionProps> = ({
 
   return (
     <div className="glass-card p-6 rounded-3xl">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-5">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
             <Utensils className="w-4 h-4" />
@@ -57,20 +66,62 @@ export const MealLogSection: React.FC<MealLogSectionProps> = ({
             </h3>
             <p className="text-xs text-slate-500 dark:text-slate-400">
               {logs.length} logged {logs.length === 1 ? 'entry' : 'entries'} today
+              {selectedCategory !== 'All' && ` (${filteredLogs.length} ${selectedCategory})`}
             </p>
           </div>
         </div>
 
-        <button
-          onClick={onOpenPhotoCapture}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>Add Food</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onOpenPhotoCapture}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-semibold shadow-sm transition active:scale-95 cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add Food</span>
+          </button>
+        </div>
       </div>
 
-      {logs.length === 0 ? (
+      {/* Filter Tabs */}
+      <div className="flex items-center justify-between flex-wrap gap-2 pb-4 mb-4 border-b border-slate-100 dark:border-slate-800/80">
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full">
+          {categories.map((cat) => {
+            const count = cat === 'All' ? logs.length : logs.filter((l) => l.mealType === cat).length;
+            const isSelected = selectedCategory === cat;
+            return (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => setSelectedCategory(cat)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                  isSelected
+                    ? 'bg-emerald-500 text-white shadow-sm'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                }`}
+              >
+                <span>{cat}</span>
+                <span
+                  className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+                    isSelected
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {selectedCategory !== 'All' && (
+          <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+            {selectedCategory} Total: <span className="font-mono text-emerald-600 dark:text-emerald-400 font-bold">{filteredCalories} kcal</span>
+          </div>
+        )}
+      </div>
+
+      {filteredLogs.length === 0 ? (
         <div className="text-center py-12 px-4 rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-800">
           <div className="w-16 h-16 mx-auto mb-3 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-500 flex items-center justify-center">
             <Camera className="w-8 h-8" />
@@ -90,7 +141,7 @@ export const MealLogSection: React.FC<MealLogSectionProps> = ({
         </div>
       ) : (
         <div className="space-y-3">
-          {logs.map((entry) => {
+          {filteredLogs.map((entry) => {
             const isExpanded = expandedId === entry.id;
             return (
               <div

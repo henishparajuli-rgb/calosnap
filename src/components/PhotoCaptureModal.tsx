@@ -62,6 +62,23 @@ function compressImage(dataUrl: string, maxDim = 1024, quality = 0.85): Promise<
   });
 }
 
+export interface CameraFoodFilter {
+  id: string;
+  name: string;
+  icon: string;
+  css: string;
+  badge: string;
+}
+
+export const FOOD_CAMERA_FILTERS: CameraFoodFilter[] = [
+  { id: 'normal', name: 'Original', icon: '📸', css: 'none', badge: 'Natural' },
+  { id: 'vivid', name: 'Vivid Dish', icon: '✨', css: 'contrast(1.18) saturate(1.35) brightness(1.04)', badge: 'Pops Colors' },
+  { id: 'warm', name: 'Warm Plate', icon: '🍛', css: 'sepia(0.2) saturate(1.25) brightness(1.05) hue-rotate(-6deg)', badge: 'Curries & Breads' },
+  { id: 'fresh', name: 'Fresh Crisp', icon: '🥗', css: 'contrast(1.2) saturate(1.25) brightness(1.08) hue-rotate(4deg)', badge: 'Salads & Greens' },
+  { id: 'hdr', name: 'HDR Detail', icon: '⚡', css: 'contrast(1.3) saturate(1.15) brightness(1.02)', badge: 'Sharper Edges' },
+  { id: 'ai', name: 'AI Scanner', icon: '🎯', css: 'contrast(1.12) brightness(1.1) saturate(1.2)', badge: 'AI Balanced' },
+];
+
 export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
   isOpen,
   onClose,
@@ -70,6 +87,10 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
 }) => {
   // Step state: 'select' | 'analyzing' | 'review'
   const [step, setStep] = useState<'select' | 'analyzing' | 'review'>('select');
+
+  // Camera Food Filter
+  const [selectedFilterId, setSelectedFilterId] = useState<string>('vivid');
+  const activeFilter = FOOD_CAMERA_FILTERS.find((f) => f.id === selectedFilterId) || FOOD_CAMERA_FILTERS[0];
 
   // Input modes
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
@@ -194,6 +215,9 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
     canvas.height = video.videoHeight || 480;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    if (activeFilter.css !== 'none') {
+      ctx.filter = activeFilter.css;
+    }
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const rawDataUrl = canvas.toDataURL('image/jpeg', 0.9);
     stopCamera();
@@ -619,6 +643,39 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
               </div>
             </div>
 
+            {/* Food Camera Lens Filter Selector */}
+            <div className="p-3 rounded-2xl bg-gradient-to-r from-emerald-500/10 via-teal-500/5 to-transparent border border-emerald-200/80 dark:border-emerald-800/60 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 text-xs font-bold text-slate-800 dark:text-slate-200">
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>Snap Food Lens Filters</span>
+                </div>
+                <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-950/80 px-2 py-0.5 rounded-full">
+                  {activeFilter.icon} {activeFilter.name} ({activeFilter.badge})
+                </span>
+              </div>
+              <div className="flex items-center gap-2 overflow-x-auto pb-1 max-w-full">
+                {FOOD_CAMERA_FILTERS.map((f) => {
+                  const isSelected = selectedFilterId === f.id;
+                  return (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setSelectedFilterId(f.id)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer flex items-center gap-1.5 shrink-0 border ${
+                        isSelected
+                          ? 'border-emerald-500 bg-emerald-500 text-white shadow-sm ring-1 ring-emerald-400'
+                          : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/80 text-slate-700 dark:text-slate-300 hover:border-emerald-300'
+                      }`}
+                    >
+                      <span>{f.icon}</span>
+                      <span>{f.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Live Camera View vs Upload Area */}
             {isCameraActive ? (
               <div className="space-y-4">
@@ -628,12 +685,13 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
                     autoPlay
                     playsInline
                     muted
-                    className="w-full h-full object-cover"
+                    style={{ filter: activeFilter.css }}
+                    className="w-full h-full object-cover transition-all duration-300"
                   />
                   {/* Viewfinder crosshairs */}
                   <div className="absolute inset-8 border border-white/40 rounded-2xl pointer-events-none flex items-center justify-center">
-                    <span className="text-xs text-white/80 font-medium bg-black/40 px-3 py-1 rounded-full backdrop-blur-sm">
-                      Align food in frame
+                    <span className="text-xs text-white/90 font-medium bg-black/50 px-3 py-1 rounded-full backdrop-blur-sm shadow-md">
+                      {activeFilter.icon} {activeFilter.name} Filter Active
                     </span>
                   </div>
                 </div>
@@ -804,6 +862,7 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
                   <img
                     src={previewImage}
                     alt="Meal preview"
+                    style={{ filter: activeFilter.css }}
                     className="w-full h-full object-cover"
                   />
                 </div>
@@ -812,6 +871,9 @@ export const PhotoCaptureModal: React.FC<PhotoCaptureModalProps> = ({
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">
                     {aiProvider || 'AI Detected'}
+                  </span>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                    {activeFilter.icon} {activeFilter.name}
                   </span>
                   <div className="flex items-center gap-1">
                     {(['Breakfast', 'Lunch', 'Dinner', 'Snack'] as MealType[]).map((t) => (
